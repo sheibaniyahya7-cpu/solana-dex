@@ -1,0 +1,65 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  --background: #0a0a0f;
+  --surface: #111118;
+}
+
+* {
+  box-sizing: border-box;
+  padding: 0;
+  margin: 0;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  background: var(--background);
+  color: #f1f5f9;
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #2a2a38; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #3a3a4e; }
+
+/* Table */
+.data-table { @apply w-full text-sm; }
+.data-table th {
+  @apply px-4 py-3 text-left text-xs font-medium text-text-muted uppercase tracking-wider border-b border-border;
+}
+.data-table td {
+  @apply px-4 py-3.5 border-b border-border/50;
+}
+.data-table tr:hover td { @apply bg-surface-2/50; }
+.data-table tr:last-child td { @apply border-b-0; }
+
+/* Number tabular */
+.tabular { font-variant-numeric: tabular-nums; }
+
+/* Card */
+.card {
+  @apply bg-surface border border-border rounded-xl;
+}
+
+/* Score ring helper */
+.score-ring {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  border-radius: 50%;
+  font-weight: 700;
+  font-size: 0.875rem;
+  border: 2px solid currentColor;
+}
