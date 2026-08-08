@@ -219,7 +219,7 @@ docker compose up postgres redis -d
 uvicorn app.main:app --reload --port 8000
 
 # Run Celery worker
-celery -A app.core.celery_app worker --loglevel=debug -Q collectors,monitors,analyzers,alerts
+celery -A app.core.celery_app worker --loglevel=debug -Q collectors,monitors,analyzers,alerts,default
 
 # Run Celery beat
 celery -A app.core.celery_app beat --loglevel=debug

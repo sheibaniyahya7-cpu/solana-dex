@@ -16,6 +16,7 @@ from app.monitors.event_types import make_whale_event, make_smart_money_event
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.redis import get_redis, RedisCache
+from app.core.task_runtime import run_async
 from app.database.base import get_session_factory
 from app.database.models.market_event import MarketEvent
 from app.database.repositories.event_repository import MarketEventRepository
@@ -158,4 +159,4 @@ class WhaleMonitor:
 @shared_task(name="app.monitors.whale_monitor.detect_whale_activity", bind=True)
 def detect_whale_activity(self) -> dict:
     """Celery task: process whale transaction queue and generate events."""
-    return asyncio.run(WhaleMonitor().run())
+    return run_async(WhaleMonitor().run())

@@ -113,17 +113,21 @@ def create_celery_app() -> Celery:
         },
     }
 
-    # Auto-discover tasks from all app modules
-    app.autodiscover_tasks(
-        packages=[
-            "app.collectors",
-            "app.monitors",
-            "app.analyzers",
-            "app.ai_agents",
-            "app.alerts",
-            "app.database",
-        ],
-        related_name="tasks",
+    # ─── Task Modules ─────────────────────────────────────────────────────────
+    # Tasks live in domain-named modules (e.g. token_collector.py), not in a
+    # `tasks.py` per package, so they are imported explicitly rather than by
+    # autodiscovery.
+    app.conf.imports = (
+        "app.collectors.token_collector",
+        "app.collectors.price_collector",
+        "app.collectors.volume_collector",
+        "app.collectors.transaction_collector",
+        "app.monitors.market_monitor",
+        "app.monitors.whale_monitor",
+        "app.analyzers.wallet_analyzer",
+        "app.ai_agents.orchestrator",
+        "app.alerts.alert_processor",
+        "app.database.cleanup",
     )
 
     return app

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 
+from app.api.dependencies import require_api_key
 from app.api.schemas.analysis_schemas import (
     AIAnalysisResponse, AnalysisRequestSchema, AnalysisSummaryResponse,
 )
@@ -38,11 +39,14 @@ async def trigger_analysis(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     repo: TokenRepository = Depends(get_token_repo),
+    _: str = Depends(require_api_key),
 ):
     """
     Queues an AI analysis job for the specified token.
     Returns immediately — analysis runs asynchronously in Celery.
     Poll GET /analysis/{mint_address}/latest for results.
+
+    Requires a valid X-API-Key in production: each run spends OpenAI credits.
     """
     token = await repo.get_by_mint(request.mint_address)
     if not token:

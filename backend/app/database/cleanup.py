@@ -23,7 +23,7 @@ def cleanup_old_records(self) -> dict:
     - Market events: 60 days
     - Sent alerts: 90 days
     """
-    import asyncio
+    from app.core.task_runtime import run_async
     from app.database.base import get_session_factory
     from app.database.models.token import TokenPriceHistory
     from app.database.models.market_event import MarketEvent
@@ -88,4 +88,4 @@ def cleanup_old_records(self) -> dict:
         logger.info("Database cleanup complete", counts=deleted_counts)
         return deleted_counts
 
-    return asyncio.run(_run())
+    return run_async(_run())

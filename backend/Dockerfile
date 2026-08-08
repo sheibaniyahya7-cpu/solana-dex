@@ -40,13 +40,14 @@ FROM dependencies AS production
 
 COPY . .
 
+# Create writable state directories before chown so the non-root user owns them.
+# Named volumes mounted here inherit that ownership from the image.
+RUN mkdir -p /app/logs /app/celerybeat
+
 # Create non-root user for security
 RUN addgroup --system appgroup && adduser --system --ingroup appgroup appuser
 RUN chown -R appuser:appgroup /app
 USER appuser
-
-# Create logs directory
-RUN mkdir -p /app/logs
 
 EXPOSE 8000
 

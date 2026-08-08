@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   # ─── PostgreSQL ───────────────────────────────────────────────────────────────
   postgres:
@@ -56,8 +54,7 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      - ./backend:/app
-      - ./logs:/app/logs
+      - backend_logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
@@ -79,19 +76,26 @@ services:
       target: production
     container_name: dex_celery_worker
     restart: unless-stopped
-    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=4 -Q collectors,monitors,analyzers,alerts
+    # `default` is required: cleanup-old-data is scheduled onto it.
+    command: celery -A app.core.celery_app worker --loglevel=info --concurrency=4 -Q collectors,monitors,analyzers,alerts,default
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dexuser}:${POSTGRES_PASSWORD:-dexpassword}@postgres:5432/${POSTGRES_DB:-dextrader}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redispassword}@redis:6379/0
     volumes:
-      - ./backend:/app
-      - ./logs:/app/logs
+      - backend_logs:/app/logs
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # The image healthcheck probes the HTTP API, which this service does not run.
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.core.celery_app inspect ping -d celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 30s
     networks:
       - dex_network
 
@@ -103,17 +107,23 @@ services:
       target: production
     container_name: dex_celery_beat
     restart: unless-stopped
-    command: celery -A app.core.celery_app beat --loglevel=info --scheduler celery.beat:PersistentScheduler
+    command: >
+      celery -A app.core.celery_app beat --loglevel=info
+      --scheduler celery.beat:PersistentScheduler
+      --schedule /app/celerybeat/celerybeat-schedule
+      --pidfile /app/celerybeat/celerybeat.pid
     env_file: .env
     environment:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dexuser}:${POSTGRES_PASSWORD:-dexpassword}@postgres:5432/${POSTGRES_DB:-dextrader}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redispassword}@redis:6379/0
     volumes:
-      - ./backend:/app
-      - ./logs:/app/logs
-      - celerybeat_data:/app/celerybeat-schedule
+      - backend_logs:/app/logs
+      - celerybeat_data:/app/celerybeat
     depends_on:
       - celery_worker
+    # Beat exposes no HTTP endpoint, so the image healthcheck cannot apply.
+    healthcheck:
+      disable: true
     networks:
       - dex_network
 
@@ -128,11 +138,19 @@ services:
     command: celery -A app.core.celery_app flower --port=5555 --basic_auth=${FLOWER_USER:-admin}:${FLOWER_PASSWORD:-flowerpassword}
     env_file: .env
     environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dexuser}:${POSTGRES_PASSWORD:-dexpassword}@postgres:5432/${POSTGRES_DB:-dextrader}
       REDIS_URL: redis://:${REDIS_PASSWORD:-redispassword}@redis:6379/0
     ports:
       - "5555:5555"
     depends_on:
       - celery_worker
+    # Flower serves on 5555, not the API's 8000, so the image healthcheck fails.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5555/healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     networks:
       - dex_network
 
@@ -176,6 +194,7 @@ volumes:
   postgres_data:
   redis_data:
   celerybeat_data:
+  backend_logs:
   nginx_logs:
 
 networks:

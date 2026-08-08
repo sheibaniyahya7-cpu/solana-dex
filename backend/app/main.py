@@ -23,7 +23,15 @@ from app.database.base import init_db, close_db
 
 # Routers
 from app.api.v1.router import api_router
-from app.api.websocket import ws_router
+from app.api.websocket import (
+    ws_router,
+    start_pubsub_forwarders,
+    stop_pubsub_forwarders,
+)
+from app.alerts.alert_processor import (
+    start_alert_listener_task,
+    stop_alert_listener_task,
+)
 
 logger = get_logger(__name__)
 
@@ -52,12 +60,21 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     await init_redis()
     logger.info("Redis initialized")
 
+    # Bridge Redis pub/sub (written by Celery workers) to WebSocket clients
+    await start_pubsub_forwarders()
+
+    # Buffer alerts published on dex:alert_queue so the Celery alert task can
+    # deliver them. Without a subscriber the queue is a dead end.
+    await start_alert_listener_task()
+
     logger.info("All services ready — platform is online")
 
     yield
 
     # ── Shutdown ─────────────────────────────────────────────────────────────
     logger.info("Shutting down platform...")
+    await stop_alert_listener_task()
+    await stop_pubsub_forwarders()
     await close_db()
     await close_redis()
     await close_all_clients()

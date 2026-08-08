@@ -18,6 +18,7 @@ from app.collectors.helius_client import helius_client
 from app.collectors.solana_rpc_client import solana_client
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.task_runtime import run_async
 from app.database.models.wallet import Wallet, WalletTrade
 from app.database.repositories.token_repository import TokenRepository
 from app.database.repositories.wallet_repository import WalletRepository
@@ -239,4 +240,4 @@ class TransactionCollector(BaseCollector):
 @shared_task(name="app.collectors.transaction_collector.collect_transactions", bind=True)
 def collect_transactions(self) -> dict:
     """Celery task: collect DEX swap transactions for tracked tokens."""
-    return asyncio.run(TransactionCollector().run())
+    return run_async(TransactionCollector().run())

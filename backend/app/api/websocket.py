@@ -9,7 +9,7 @@ Channels:
 
 import asyncio
 import json
-from typing import Dict, Set
+from typing import Dict, List, Set
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from fastapi.websockets import WebSocketState
@@ -20,6 +20,9 @@ from app.core.redis import get_redis
 
 ws_router = APIRouter(tags=["websocket"])
 logger = get_logger(__name__)
+
+PING_INTERVAL = 30.0  # seconds between keepalive pings
+SEND_TIMEOUT = 5.0    # per-connection budget for a broadcast frame
 
 
 # ─── Connection Manager ───────────────────────────────────────────────────────
@@ -48,19 +51,27 @@ class ConnectionManager:
 
     async def broadcast(self, channel: str, message: dict) -> None:
         """Send a message to all connections on a channel."""
-        if channel not in self._channels:
+        connections = list(self._channels.get(channel, ()))
+        if not connections:
             return
-        dead: Set[WebSocket] = set()
         payload = json.dumps(message, default=str)
-        for ws in self._channels[channel]:
+
+        async def send(ws: WebSocket) -> bool:
+            if ws.client_state != WebSocketState.CONNECTED:
+                return False
             try:
-                if ws.client_state == WebSocketState.CONNECTED:
-                    await ws.send_text(payload)
+                await asyncio.wait_for(ws.send_text(payload), timeout=SEND_TIMEOUT)
+                return True
             except Exception:
-                dead.add(ws)
-        # Clean up dead connections
-        for ws in dead:
-            self._channels[channel].discard(ws)
+                return False
+
+        # Concurrent so that one unresponsive client cannot stall delivery to
+        # the rest of the channel.
+        delivered = await asyncio.gather(*(send(ws) for ws in connections))
+
+        for ws, ok in zip(connections, delivered):
+            if not ok:
+                self._channels.get(channel, set()).discard(ws)
 
     async def send_personal(self, websocket: WebSocket, message: dict) -> None:
         await websocket.send_text(json.dumps(message, default=str))
@@ -73,6 +84,28 @@ manager = ConnectionManager()
 
 
 # ─── Redis Pub/Sub Forwarder ──────────────────────────────────────────────────
+
+# Celery workers run in separate processes, so they hand updates to the API via
+# Redis pub/sub. These routes map a published channel (without the "dex:"
+# namespace) onto the WebSocket channel that serves it.
+PUBSUB_ROUTES: Dict[str, str] = {
+    "price_updates": "market",
+    "volume_spikes": "market",
+    "events": "events",
+    "whale_transactions": "events",
+    "alerts": "alerts",
+}
+
+# Per-token channels are created on demand, so they are matched by pattern and
+# forwarded to the WebSocket channel of the same name.
+TOKEN_CHANNEL_PATTERN = "token:*"
+
+_forwarder_tasks: List[asyncio.Task] = []
+
+
+def _decode(value) -> str:
+    return value.decode() if isinstance(value, bytes) else str(value)
+
 
 async def redis_pubsub_forwarder(channel_pattern: str, ws_channel: str) -> None:
     """
@@ -90,14 +123,114 @@ async def redis_pubsub_forwarder(channel_pattern: str, ws_channel: str) -> None:
                 try:
                     data = json.loads(message["data"])
                     await manager.broadcast(ws_channel, data)
-                except (json.JSONDecodeError, Exception) as e:
+                except Exception as e:
                     logger.warning("PubSub message parse error", error=str(e))
     except asyncio.CancelledError:
-        await pubsub.unsubscribe()
         logger.info("Redis pubsub listener stopped", channel=channel_pattern)
+        raise
+    finally:
+        # Release the pooled connection; the supervisor may restart this task.
+        await pubsub.aclose()
+
+
+async def redis_pattern_forwarder(pattern: str) -> None:
+    """
+    Subscribes to a Redis pub/sub pattern and broadcasts each message to the
+    WebSocket channel named after the Redis channel it arrived on.
+    """
+    redis = get_redis()
+    pubsub = redis.pubsub()
+    await pubsub.psubscribe(f"dex:{pattern}")
+    logger.info("Redis pubsub pattern listener started", pattern=pattern)
+
+    try:
+        async for message in pubsub.listen():
+            if message["type"] == "pmessage":
+                try:
+                    ws_channel = _decode(message["channel"]).split(":", 1)[1]
+                    data = json.loads(message["data"])
+                    await manager.broadcast(ws_channel, data)
+                except Exception as e:
+                    logger.warning("PubSub message parse error", error=str(e))
+    except asyncio.CancelledError:
+        logger.info("Redis pubsub pattern listener stopped", pattern=pattern)
+        raise
+    finally:
+        await pubsub.aclose()
+
+
+async def _supervise(name: str, factory) -> None:
+    """Restart a forwarder if its Redis connection drops, with backoff."""
+    delay = 1.0
+    while True:
+        try:
+            await factory()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("PubSub forwarder crashed — restarting",
+                         forwarder=name, error=str(e), retry_in=delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 30.0)
+
+
+async def start_pubsub_forwarders() -> None:
+    """
+    Launch one background task per pub/sub route. Called at application
+    startup; without these, nothing published by the workers ever reaches a
+    connected WebSocket client.
+    """
+    if _forwarder_tasks:
+        return
+
+    for redis_channel, ws_channel in PUBSUB_ROUTES.items():
+        _forwarder_tasks.append(asyncio.create_task(
+            _supervise(
+                redis_channel,
+                lambda c=redis_channel, w=ws_channel: redis_pubsub_forwarder(c, w),
+            ),
+            name=f"pubsub-forwarder:{redis_channel}",
+        ))
+
+    _forwarder_tasks.append(asyncio.create_task(
+        _supervise(
+            TOKEN_CHANNEL_PATTERN,
+            lambda: redis_pattern_forwarder(TOKEN_CHANNEL_PATTERN),
+        ),
+        name="pubsub-forwarder:token",
+    ))
+
+    logger.info("Pub/sub forwarders started", count=len(_forwarder_tasks))
+
+
+async def stop_pubsub_forwarders() -> None:
+    """Cancel all forwarder tasks and wait for them to unwind."""
+    if not _forwarder_tasks:
+        return
+    for task in _forwarder_tasks:
+        task.cancel()
+    await asyncio.gather(*_forwarder_tasks, return_exceptions=True)
+    _forwarder_tasks.clear()
+    logger.info("Pub/sub forwarders stopped")
 
 
 # ─── WebSocket Endpoints ──────────────────────────────────────────────────────
+
+async def _serve_until_disconnect(websocket: WebSocket) -> None:
+    """
+    Hold a connection open, sending a keepalive ping when the client is idle.
+
+    Reads from the socket instead of sleeping blindly: with no pending receive,
+    a client that goes away is not noticed until the next send fails, so its
+    entry lingers in the registry and swallows broadcasts meant for it. Inbound
+    frames carry no meaning in this protocol and are discarded.
+    """
+    while True:
+        try:
+            await asyncio.wait_for(websocket.receive_text(), timeout=PING_INTERVAL)
+        except asyncio.TimeoutError:
+            await manager.send_personal(websocket, {"type": "ping"})
+
 
 @ws_router.websocket("/market")
 async def ws_market_feed(websocket: WebSocket):
@@ -113,11 +246,11 @@ async def ws_market_feed(websocket: WebSocket):
         "message": "Connected to live market feed",
     })
     try:
-        while True:
-            # Keep connection alive — real data comes via Redis pubsub broadcasts
-            await asyncio.sleep(30)
-            await manager.send_personal(websocket, {"type": "ping"})
-    except WebSocketDisconnect:
+        # Real data arrives via the Redis pub/sub forwarders, not from here.
+        await _serve_until_disconnect(websocket)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
         manager.disconnect(websocket, "market")
 
 
@@ -134,10 +267,10 @@ async def ws_events_feed(websocket: WebSocket):
         "message": "Connected to live event feed",
     })
     try:
-        while True:
-            await asyncio.sleep(30)
-            await manager.send_personal(websocket, {"type": "ping"})
-    except WebSocketDisconnect:
+        await _serve_until_disconnect(websocket)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
         manager.disconnect(websocket, "events")
 
 
@@ -154,10 +287,10 @@ async def ws_alerts_feed(websocket: WebSocket):
         "message": "Connected to live alert feed",
     })
     try:
-        while True:
-            await asyncio.sleep(30)
-            await manager.send_personal(websocket, {"type": "ping"})
-    except WebSocketDisconnect:
+        await _serve_until_disconnect(websocket)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
         manager.disconnect(websocket, "alerts")
 
 
@@ -176,10 +309,10 @@ async def ws_token_feed(websocket: WebSocket, mint_address: str):
         "message": f"Subscribed to updates for {mint_address[:8]}...",
     })
     try:
-        while True:
-            await asyncio.sleep(30)
-            await manager.send_personal(websocket, {"type": "ping"})
-    except WebSocketDisconnect:
+        await _serve_until_disconnect(websocket)
+    except (WebSocketDisconnect, RuntimeError):
+        pass
+    finally:
         manager.disconnect(websocket, channel)
 
 

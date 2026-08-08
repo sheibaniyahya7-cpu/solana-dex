@@ -26,11 +26,13 @@ from app.core.config import settings  # noqa: E402
 # ─── Alembic Config ───────────────────────────────────────────────────────────
 config = context.config
 
-# Inject real DB URL from app settings (sync driver for Alembic)
+# Inject real DB URL from app settings. Online mode drives an async engine, so
+# the asyncpg driver is kept; offline mode renders SQL through a sync driver.
+config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+
 sync_url = settings.DATABASE_URL.replace(
     "postgresql+asyncpg://", "postgresql+psycopg2://"
 )
-config.set_main_option("sqlalchemy.url", sync_url)
 
 # Interpret the config file for Python logging
 if config.config_file_name is not None:
@@ -47,9 +49,8 @@ def run_migrations_offline() -> None:
     Run migrations without a DB connection.
     Produces SQL scripts for manual review/application.
     """
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=sync_url,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},

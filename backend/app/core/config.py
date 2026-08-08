@@ -26,6 +26,10 @@ class Settings(BaseSettings):
     SECRET_KEY: str = Field(min_length=32)
     API_V1_PREFIX: str = "/api/v1"
 
+    # Key required by write endpoints in production. Generate one with
+    # app.core.security.generate_api_key(); requests present it as X-API-Key.
+    API_KEY: str = ""
+
     # CORS — comma-separated list of allowed origins
     ALLOWED_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
 

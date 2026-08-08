@@ -16,6 +16,7 @@ from app.collectors.birdeye_client import birdeye_client
 from app.collectors.dexscreener_client import dexscreener_client
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.task_runtime import run_async
 from app.database.repositories.token_repository import TokenRepository
 
 logger = get_logger(__name__)
@@ -149,4 +150,4 @@ class VolumeCollector(BaseCollector):
 @shared_task(name="app.collectors.volume_collector.collect_volumes", bind=True)
 def collect_volumes(self) -> dict:
     """Celery task: refresh token volumes and detect spikes."""
-    return asyncio.run(VolumeCollector().run())
+    return run_async(VolumeCollector().run())

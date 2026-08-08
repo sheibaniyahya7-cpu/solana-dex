@@ -18,6 +18,7 @@ from app.collectors.birdeye_client import birdeye_client
 from app.collectors.helius_client import helius_client
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.task_runtime import run_async
 from app.database.models.token import Token
 from app.database.repositories.token_repository import TokenRepository
 
@@ -164,4 +165,4 @@ class TokenCollector(BaseCollector):
 @shared_task(name="app.collectors.token_collector.collect_new_tokens", bind=True)
 def collect_new_tokens(self) -> dict:
     """Celery task: discover and update tokens from all sources."""
-    return asyncio.run(TokenCollector().run())
+    return run_async(TokenCollector().run())

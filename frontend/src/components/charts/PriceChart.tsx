@@ -4,6 +4,7 @@ import {
   Chart as ChartJS, CategoryScale, LinearScale,
   PointElement, LineElement, Title, Tooltip, Legend,
   Filler,
+  type TooltipItem,
 } from "chart.js";
 import { Line } from "react-chartjs-2";
 import type { PriceCandle } from "@/types";
@@ -67,8 +68,9 @@ export function PriceChart({ candles, height = 200 }: PriceChartProps) {
         titleColor: "#94a3b8",
         bodyColor: "#f1f5f9",
         callbacks: {
-          label: (ctx: { parsed: { y: number } }) => {
+          label: (ctx: TooltipItem<"line">) => {
             const v = ctx.parsed.y;
+            if (v === null) return "";
             return ` $${v < 0.01 ? v.toFixed(8) : v.toFixed(4)}`;
           },
         },

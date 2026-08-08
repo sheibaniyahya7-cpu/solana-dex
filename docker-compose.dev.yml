@@ -1,5 +1,7 @@
-version: "3.9"
 # Development overrides — use with: docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+# The development image stage runs as root, so bind-mounting host source over
+# /app is safe here; the production stage runs as a non-root user and must use
+# the code baked into the image instead.
 
 services:
   backend:
@@ -26,7 +28,18 @@ services:
   celery_worker:
     build:
       target: development
-    command: celery -A app.core.celery_app worker --loglevel=debug --concurrency=2 -Q collectors,monitors,analyzers,alerts
+    command: celery -A app.core.celery_app worker --loglevel=debug --concurrency=2 -Q collectors,monitors,analyzers,alerts,default
+    volumes:
+      - ./backend:/app
+      - backend_logs:/app/logs
+
+  celery_beat:
+    build:
+      target: development
+    volumes:
+      - ./backend:/app
+      - backend_logs:/app/logs
+      - celerybeat_data:/app/celerybeat
 
   # pgAdmin for database management in dev
   pgadmin:

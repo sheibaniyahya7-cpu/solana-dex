@@ -10,8 +10,10 @@ FROM base AS deps
 # Install dependencies needed for native modules
 RUN apk add --no-cache libc6-compat
 
-COPY package.json package-lock.json* ./
-RUN npm ci --only=production
+COPY package.json package-lock.json ./
+# NODE_ENV=production makes npm omit devDependencies, but the builder stage
+# needs typescript/tailwind/postcss to compile.
+RUN npm ci --include=dev
 
 # ─── Builder Stage ────────────────────────────────────────────────────────────
 FROM base AS builder
@@ -49,7 +51,9 @@ EXPOSE 3000
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
+# 127.0.0.1, not localhost: the server binds IPv4 only, and busybox wget gives
+# up on the ::1 answer instead of trying the next address.
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD wget -qO- http://localhost:3000/api/health || exit 1
+    CMD wget -qO- http://127.0.0.1:3000/ || exit 1
 
 CMD ["node", "server.js"]

@@ -33,6 +33,7 @@ from app.analyzers.security_analyzer import SecurityAnalyzer
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.redis import get_redis, RedisCache
+from app.core.task_runtime import run_async
 from app.database.base import get_session_factory
 from app.database.models.analysis import AIAnalysis
 from app.database.models.market_event import MarketEvent
@@ -473,12 +474,12 @@ class BatchAnalysisRunner:
 @shared_task(name="app.ai_agents.orchestrator.run_analysis_cycle", bind=True)
 def run_analysis_cycle(self) -> dict:
     """Celery beat task: analyze top tokens every 5 minutes."""
-    return asyncio.run(BatchAnalysisRunner().run())
+    return run_async(BatchAnalysisRunner().run())
 
 
 @shared_task(name="app.ai_agents.orchestrator.run_token_analysis", bind=True)
 def run_token_analysis(self, mint_address: str, force_refresh: bool = False) -> Optional[Dict]:
     """Celery task: analyze a single token on demand."""
-    return asyncio.run(
+    return run_async(
         AnalysisOrchestrator().analyze_token(mint_address, force_refresh=force_refresh)
     )

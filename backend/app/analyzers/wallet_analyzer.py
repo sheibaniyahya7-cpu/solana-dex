@@ -21,6 +21,7 @@ from celery import shared_task
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.core.task_runtime import run_async
 from app.collectors.birdeye_client import birdeye_client
 from app.collectors.helius_client import helius_client
 from app.collectors.solana_rpc_client import solana_client
@@ -492,10 +493,10 @@ class WalletAnalyzer:
 @shared_task(name="app.analyzers.wallet_analyzer.analyze_active_wallets", bind=True)
 def analyze_active_wallets(self) -> dict:
     """Celery task: analyze all stale tracked wallets."""
-    return asyncio.run(WalletAnalyzer().run())
+    return run_async(WalletAnalyzer().run())
 
 
 @shared_task(name="app.analyzers.wallet_analyzer.analyze_single_wallet", bind=True)
 def analyze_single_wallet(self, address: str) -> Optional[Dict]:
     """Celery task: analyze a single wallet on-demand."""
-    return asyncio.run(WalletAnalyzer().analyze_wallet(address))
+    return run_async(WalletAnalyzer().analyze_wallet(address))

@@ -27,6 +27,7 @@ from app.monitors.event_types import (
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.redis import get_redis, RedisCache
+from app.core.task_runtime import run_async
 from app.database.base import get_session_factory
 from app.database.models.market_event import MarketEvent
 from app.database.models.token import Token
@@ -409,4 +410,4 @@ class MarketMonitor:
 @shared_task(name="app.monitors.market_monitor.detect_market_events", bind=True)
 def detect_market_events(self) -> dict:
     """Celery task: run one full monitoring cycle."""
-    return asyncio.run(MarketMonitor().run())
+    return run_async(MarketMonitor().run())

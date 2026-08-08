@@ -17,6 +17,7 @@ from app.collectors.birdeye_client import birdeye_client
 from app.core.config import settings
 from app.core.http_client import get_http_client, safe_get
 from app.core.logging import get_logger
+from app.core.task_runtime import run_async
 from app.database.models.token import Token, TokenPriceHistory
 from app.database.repositories.token_repository import TokenRepository
 
@@ -192,4 +193,4 @@ class PriceCollector(BaseCollector):
 @shared_task(name="app.collectors.price_collector.collect_prices", bind=True)
 def collect_prices(self) -> dict:
     """Celery task: refresh token prices."""
-    return asyncio.run(PriceCollector().run())
+    return run_async(PriceCollector().run())

@@ -9,6 +9,8 @@ Architecture:
 
 import asyncio
 import json
+import os
+import socket
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
@@ -18,6 +20,7 @@ from app.alerts.telegram_bot import telegram_bot
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.core.redis import get_redis, RedisCache
+from app.core.task_runtime import run_async
 from app.database.base import get_session_factory
 from app.database.models.alert import Alert
 from app.database.repositories.event_repository import AlertRepository
@@ -168,30 +171,83 @@ class AlertProcessor:
 
 # ─── Redis Pub/Sub listener for real-time alert ingestion ──────────────────────
 
+LISTENER_LOCK_KEY = "dex:alert_listener:lock"
+LISTENER_LOCK_TTL = 30  # seconds
+
+_listener_task: Optional[asyncio.Task] = None
+
+
 async def start_alert_listener() -> None:
     """
     Long-running async task that listens to the Redis alert_queue pub/sub channel
     and buffers incoming alerts for processing.
     Called once at application startup in production environments.
-    """
-    redis = get_redis()
-    pubsub = redis.pubsub()
-    await pubsub.subscribe("dex:alert_queue")
-    logger.info("Alert listener started — subscribed to dex:alert_queue")
 
-    try:
-        async for message in pubsub.listen():
-            if message["type"] == "message":
+    The API is served by several uvicorn worker processes. A Redis lock keeps
+    exactly one of them subscribed — otherwise every published alert would be
+    buffered, persisted, and sent to Telegram once per process.
+    """
+    owner = f"{socket.gethostname()}:{os.getpid()}"
+    redis = get_redis()
+    cache = RedisCache(redis, "dex")
+
+    while True:
+        if not await redis.set(LISTENER_LOCK_KEY, owner, nx=True, ex=LISTENER_LOCK_TTL):
+            # Another process owns the subscription; wait for it to go away.
+            await asyncio.sleep(LISTENER_LOCK_TTL / 3)
+            continue
+
+        pubsub = redis.pubsub()
+        await pubsub.subscribe("dex:alert_queue")
+        logger.info("Alert listener started — subscribed to dex:alert_queue", owner=owner)
+
+        try:
+            while True:
+                message = await pubsub.get_message(
+                    ignore_subscribe_messages=True, timeout=1.0)
+
+                # Hold the lock for as long as this process stays subscribed.
+                if await redis.get(LISTENER_LOCK_KEY) != owner:
+                    logger.warning("Alert listener lost its lock — re-contending")
+                    break
+                await redis.expire(LISTENER_LOCK_KEY, LISTENER_LOCK_TTL)
+
+                if message is None:
+                    continue
                 try:
                     data = json.loads(message["data"])
                     # Buffer into a Redis list for batch processing
-                    cache = RedisCache(redis, "dex")
                     await cache.lpush_trim("alert_queue_buffer", data, max_len=500)
                 except Exception as e:
                     logger.warning("Alert buffer error", error=str(e))
-    except asyncio.CancelledError:
-        await pubsub.unsubscribe()
-        logger.info("Alert listener stopped")
+        except asyncio.CancelledError:
+            await pubsub.unsubscribe()
+            if await redis.get(LISTENER_LOCK_KEY) == owner:
+                await redis.delete(LISTENER_LOCK_KEY)
+            logger.info("Alert listener stopped")
+            raise
+        except Exception as e:
+            logger.error("Alert listener failed — restarting", error=str(e))
+            await asyncio.sleep(1)
+        finally:
+            await pubsub.aclose()
+
+
+async def start_alert_listener_task() -> None:
+    """Launch the alert listener as a background task at application startup."""
+    global _listener_task
+    if _listener_task is None or _listener_task.done():
+        _listener_task = asyncio.create_task(start_alert_listener(), name="alert-listener")
+
+
+async def stop_alert_listener_task() -> None:
+    """Cancel the alert listener and release its lock."""
+    global _listener_task
+    if _listener_task is None:
+        return
+    _listener_task.cancel()
+    await asyncio.gather(_listener_task, return_exceptions=True)
+    _listener_task = None
 
 
 # ─── Celery task ──────────────────────────────────────────────────────────────
@@ -199,4 +255,4 @@ async def start_alert_listener() -> None:
 @shared_task(name="app.alerts.alert_processor.process_alerts", bind=True)
 def process_alerts(self) -> dict:
     """Celery task: deliver pending alerts from queue."""
-    return asyncio.run(AlertProcessor().process_pending_alerts())
+    return run_async(AlertProcessor().process_pending_alerts())
